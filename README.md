@@ -1,2 +1,2 @@
-# zero-n-to-3
+# Instruct 3D-to-3D
 CS236 project
