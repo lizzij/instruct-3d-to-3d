@@ -67,3 +67,12 @@ python run_zero123.py \
     --vox.blend_bg_texture False \
     --nerf_path "data/nerf_wild"
 ```
+
+## Instruct-Pix2Pix
+The above set up should get Instruct-Pix2Pix as well.
+To test this, run the following command:
+```
+python edit_cli.py --steps 100 --resolution 512 --seed 1371 --cfg-text 7.5 \
+    --cfg-image 1.2 --input imgs/example.jpg --output imgs/output.jpg --edit \
+     "turn him into a cyborg"
+```
