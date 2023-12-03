@@ -29,6 +29,7 @@ def sample_random_vector(norm=0.05):
     vec /= np.linalg.norm(vec)
     vec *= norm
     return vec
+
 def sample_near_eye(eye, norm=0.05):
     near_eye = eye + sample_random_vector(norm=norm)
     return near_eye

@@ -13,6 +13,41 @@ sys.path.append('../zero123')
 from ldm.util import create_carvekit_interface, load_and_preprocess
 import matplotlib.pyplot as plt
 
+
+def load_metadata(root):
+    with open(root / f'transforms_train.json', "r") as f:
+        meta = json.load(f)
+    return meta
+
+
+def load_data(root="zero123_nerf_output", step=0, meta=None):
+    root = Path(root)
+
+    if meta is None:
+        meta = load_metadata(root)
+
+    imgs, poses = [], []
+
+    carvekit = create_carvekit_interface()
+    frame = meta['frames'][step]
+    file_name = root / f"{frame['file_path']}.png"
+    with PIL.Image.open(file_name) as im:
+        # Remove the background for a cleaner image
+        im = load_and_preprocess(carvekit, im)
+        im = cv2.resize(im, (800, 800), interpolation = cv2.INTER_CUBIC)
+
+    c2w = frame['transform_matrix']
+
+    imgs.append(im)
+    poses.append(c2w)
+
+    imgs = (np.array(imgs) / 255.).astype(np.float32)  # (RGBA) imgs
+    imgs = blend_rgba(imgs)
+    poses = np.array(poses).astype(np.float32)
+
+    return imgs[0], poses[0]
+
+
 def load_blender(split, scene="lego", half_res=False, path="data/nerf_synthetic"):
     assert split in ("train", "val", "test")
 
