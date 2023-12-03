@@ -1,3 +1,4 @@
+from typing import Optional
 from pathlib import Path
 import numpy as np
 import torch
@@ -17,11 +18,14 @@ class SD(BaseConf):
     v2_highres:     bool = False
     prompt:         str = "a photograph of an astronaut riding a horse"
     im_path:        str = "data/nerf_synthetic/chair/train/r_2.png"
-    scale:          float = 3.0  # classifier free guidance scale
+    scale:          Optional[float] = 3.0  # classifier free guidance scale
+    text_cfg_scale: Optional[float] = 7.5,
+    image_cfg_scale:Optional[float] = 1.5,
     precision:      str = 'autocast'
 
     def make(self):
         args = self.dict()
+        print(args)
         model = StableDiffusion(**args)
         return model
 

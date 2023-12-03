@@ -141,6 +141,7 @@ def ValidateTrainingPoints(score_model, vox, poser):
 def main():
     seed_everything(0)
     GenerateTrainingDataFromZero123()
+    print('Validating generated data. Feel free to terminate early.')
     ValidateTrainingDataFromZero123()
 
 

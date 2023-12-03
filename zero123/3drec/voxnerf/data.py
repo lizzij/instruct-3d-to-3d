@@ -15,14 +15,12 @@ import matplotlib.pyplot as plt
 
 
 def load_metadata(root):
-    with open(root / f'transforms_train.json', "r") as f:
+    with open(os.path.join(root, f'transform_train.json'), "r") as f:
         meta = json.load(f)
     return meta
 
 
 def load_data(root="zero123_nerf_output", step=0, meta=None):
-    root = Path(root)
-
     if meta is None:
         meta = load_metadata(root)
 
@@ -30,7 +28,7 @@ def load_data(root="zero123_nerf_output", step=0, meta=None):
 
     carvekit = create_carvekit_interface()
     frame = meta['frames'][step]
-    file_name = root / f"{frame['file_path']}.png"
+    file_name = os.path.join(root, f"{frame['file_path']}")
     with PIL.Image.open(file_name) as im:
         # Remove the background for a cleaner image
         im = load_and_preprocess(carvekit, im)
