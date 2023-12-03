@@ -140,7 +140,7 @@ def ValidateTrainingPoints(score_model, vox, poser):
 
 def main():
     seed_everything(0)
-    #GenerateTrainingDataFromZero123()
+    GenerateTrainingDataFromZero123()
     ValidateTrainingDataFromZero123()
 
 
