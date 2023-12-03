@@ -64,14 +64,14 @@ def _dict_to_yaml(arg):
     return yaml.safe_dump(arg, sort_keys=False, allow_unicode=True)
 
 
-def dispatch(module):
+def dispatch(module, cfg_name='full_config.yml'):
     cfg = optional_load_config()
     cfg = module(**cfg).dict()
 
     cfg = argparse_cfg_template(cfg)  # cmdline takes priority
     mod = module(**cfg)
 
-    write_full_config(mod)
+    write_full_config(mod, fname=cfg_name)
 
     mod.run()
 

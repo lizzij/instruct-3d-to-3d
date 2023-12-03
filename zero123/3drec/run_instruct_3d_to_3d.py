@@ -1,10 +1,9 @@
-import math
+from typing import Optional
+import cv2
 import numpy as np
 import torch
 from imageio import imwrite
 from pydantic import validator
-import cv2
-import math
 
 from torchvision import transforms
 
@@ -33,16 +32,22 @@ device_glb = torch.device("cuda")
 class InstructSJC(BaseConf):
     family:     str = "sd"
     sd:         SD = SD(
-        variant="objaverse",
-        scale=100.0
+        variant="instruct_pix2pix",
+        text_cfg_scale=7.5,
+        image_cfg_scale=1.5,
+        scale=None,
+        prompt="",
+        im_path="instruct_pix2pix"
     )
+    training_data_dir: str='zero123_nerf_output'
     lr:         float = 0.05
-    n_steps:    int = 10000
+    n_steps:    int = 1000
     vox:        VoxConfig = VoxConfig(
         model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
         blend_bg_texture=False, bg_texture_hw=4,
         bbox_len=1.0
     )
+    vox_warmstart_ckpt: Optional[str] = None
     pose:       PoseConfig = PoseConfig(rend_hw=32, FoV=49.1, R=2.0)
 
     emptiness_scale:    int = 10
@@ -52,20 +57,13 @@ class InstructSJC(BaseConf):
 
     grad_accum: int = 1
 
+    train_view:         bool = True
+
     depth_smooth_weight: float = 1e5
     near_view_weight: float = 1e5
-
-    depth_weight:       int = 0
+    view_weight:        int = 10000
 
     var_red:     bool = True
-
-    train_view:         bool = True
-    scene:              str = 'chair'
-    index:              int = 2
-
-    view_weight:        int = 10000
-    prefix:             str = 'exp'
-    nerf_path:          str = "data/nerf_wild"
 
     @validator("vox")
     def check_vox(cls, vox_cfg, values):
@@ -86,13 +84,17 @@ class InstructSJC(BaseConf):
         cfgs.pop("pose")
         poser = self.pose.make()
 
+        if self.vox_warmstart_ckpt:
+            state = torch.load(self.vox_warmstart_ckpt, map_location="cpu")
+            vox.load_state_dict(state)
+
         instruct_sjc_3d(**cfgs, poser=poser, model=model, vox=vox)
 
 
-def instruct_sjc_3d(poser, vox, model: ScoreAdapter,
+def instruct_sjc_3d(poser, vox, model: StableDiffusion,
     lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
-    depth_weight, var_red, train_view, scene, index, view_weight, prefix, nerf_path, \
-    depth_smooth_weight, near_view_weight, grad_accum, **kwargs):
+    var_red, train_view, view_weight, \
+    depth_smooth_weight, near_view_weight, grad_accum, training_data_dir, **kwargs):
 
     assert model.samps_centered()
     _, target_H, target_W = model.data_shape()
@@ -104,12 +106,13 @@ def instruct_sjc_3d(poser, vox, model: ScoreAdapter,
     H, W = poser.H, poser.W
 
     ts = model.us[30:-10]
-    fuse = EarlyLoopBreak(5)
+    fuse = EarlyLoopBreak(1)
 
-    folder_name = "instruc_pix2pix_output"
+    folder_name = "instruct_pix2pix_output"
 
     # load nerf view
-    metadata = voxnerf.data.load_metadata('zero123_nerf_output')
+    metadata = voxnerf.data.load_metadata(training_data_dir)
+    epoch_size = len(metadata['frames'])
     K = poser.K
 
     opt.zero_grad()
@@ -118,34 +121,32 @@ def instruct_sjc_3d(poser, vox, model: ScoreAdapter,
         HeartBeat(pbar) as hbeat, \
             EventStorage(folder_name) as metric:
         
-        with torch.no_grad():
+        tforms = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop((256, 256))
+        ])
 
-            tforms = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop((256, 256))
-            ])
-
-            input_im = tforms(input_image)
-
-            # get input embedding
-            model.clip_emb = model.model.get_learned_conditioning(input_im.float()).tile(1,1,1).detach()
-            model.vae_emb = model.model.encode_first_stage(input_im.float()).mode().detach()
 
         for i in range(n_steps):
             if fuse.on_break():
                 break
 
-            input_image, input_pose = voxnerf.data.load_data(i)
+            input_image, input_pose = voxnerf.data.load_data(root=training_data_dir, step=i%epoch_size, meta=metadata)
             input_pose[:3, -1] = input_pose[:3, -1] / np.linalg.norm(input_pose[:3, -1]) * poser.R
             input_image = cv2.resize(input_image, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
 
             # to torch tensor
-            input_image = torch.as_tensor(input_image, dtype=float, device=device_glb)
+            input_image = torch.as_tensor(input_image, dtype=float, device=device_glb).float()
             input_image = input_image.permute(2, 0, 1)[None, :, :]
             input_image = input_image * 2. - 1.
+            input_image = tforms(input_image)
+
+            if every(pbar, percent=1):
+                metric.put_artifact("src_view", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(input_image)[0]))
 
             
             if train_view:
+                #TODO(any): Right now we fail to train a baseline NeRF through this. Need to investigate to see what's wrong.
                 with torch.enable_grad():
                     y_, depth_, ws_ = run_zero123.render_one_view(vox, aabb, H, W, K, input_pose, return_w=True)
                     y_ = model.decode(y_)
@@ -156,7 +157,7 @@ def instruct_sjc_3d(poser, vox, model: ScoreAdapter,
 
                 input_loss = rgb_loss * float(view_weight)
                 input_loss.backward(retain_graph=True)
-                if train_view and i % 100 == 0:
+                if every(pbar, percent=1):
                     metric.put_artifact("input_view", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(y_)[0]))
 
             # y: [1, 4, 64, 64] depth: [64, 64]  ws: [n, 4096]
@@ -179,30 +180,29 @@ def instruct_sjc_3d(poser, vox, model: ScoreAdapter,
             else:
                 y = torch.nn.functional.interpolate(y, (target_H, target_W), mode='bilinear')
 
+            # TODO(any): Enable this once we can train a naive NeRF
             # Do the actual jacobian chaining through diffusion model.
-            with torch.no_grad():
-                chosen_σs = np.random.choice(ts, bs, replace=False)
-                chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
-                chosen_σs = torch.as_tensor(chosen_σs, device=model.device, dtype=torch.float32)
+            if False:
+                with torch.no_grad():
+                    chosen_σs = np.random.choice(ts, bs, replace=False)
+                    chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
+                    chosen_σs = torch.as_tensor(chosen_σs, device=model.device, dtype=torch.float32)
 
-                noise = torch.randn(bs, *y.shape[1:], device=model.device)
+                    noise = torch.randn(bs, *y.shape[1:], device=model.device)
 
-                zs = y + chosen_σs * noise
+                    zs = y + chosen_σs * noise
 
-                # TODO(any): Figure out the correct conditioning for instruct-pix2pix
-                # so we can compute the denoised version of zs.
-                Ds = y
-                # score_conds = model.img_emb(input_im, conditioning_key='hybrid', T=T)
-                # Ds = model.denoise_objaverse(zs, chosen_σs, score_conds)
+                    cond = model.intruct_pix2pix_emb(input_image)
+                    Ds = model.denoise_instruct_pix2pix(zs, chosen_σs, cond)
 
-                if var_red:
-                    grad = (Ds - y) / chosen_σs
-                else:
-                    grad = (Ds - zs) / chosen_σs
+                    if var_red:
+                        grad = (Ds - y) / chosen_σs
+                    else:
+                        grad = (Ds - zs) / chosen_σs
 
-                grad = grad.mean(0, keepdim=True)
+                    grad = grad.mean(0, keepdim=True)
 
-            y.backward(-grad, retain_graph=True)
+                y.backward(-grad, retain_graph=True)
 
             # negative emptiness loss
             emptiness_loss = (torch.log(1 + emptiness_scale * ws) * (-1 / 2 * ws)).mean()
@@ -252,6 +252,7 @@ def instruct_sjc_3d(poser, vox, model: ScoreAdapter,
 
 def main():
     seed_everything(0)
+    dispatch(InstructSJC, cfg_name="instruct_config.yml")
 
 
 if __name__ == "__main__":

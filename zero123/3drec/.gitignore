@@ -149,4 +149,4 @@ dmypy.json
 
 # Ignore generated data
 zero123_nerf_output
-zero123_config.yml
+instruct_pix2pix_output

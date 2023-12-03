@@ -53,9 +53,18 @@ def load_model_from_config(config, ckpt, verbose=False):
     model.eval()
     return model
 
-def load_objaverse_model(ckpt_root):
+def load_objaverse_model():
     ckpt_fname = '../zero123/105000.ckpt'
     cfg_fname = '../zero123/configs/sd-objaverse-finetune-c_concat-256.yaml'
+    H, W = 256, 256
+
+    config = OmegaConf.load(str(cfg_fname))
+    model = load_model_from_config(config, str(ckpt_fname))
+    return model, H, W
+
+def load_instruct_pix2pix_model():
+    ckpt_fname = '../checkpoints/instruct-pix2pix-00-22000.ckpt'
+    cfg_fname = '../configs/generate.yaml'
     H, W = 256, 256
 
     config = OmegaConf.load(str(cfg_fname))
@@ -71,13 +80,23 @@ def _sqrt(x):
 
 
 class StableDiffusion(ScoreAdapter):
-    def __init__(self, variant, v2_highres, prompt, scale, precision, im_path=None, init_model=True):
+    def __init__(self, variant, v2_highres, prompt, scale, precision, im_path=None, init_model=True,
+                 text_cfg_scale=None, image_cfg_scale=None):
+        add_import_path("zero123")
         if variant == "objaverse":
-            add_import_path("zero123")
             if init_model:
-                self.model, H, W = load_objaverse_model(self.checkpoint_root())
+                self.model, H, W = load_objaverse_model()
             else:
                 self.model, H, W = None, 256, 256
+            if scale is None:
+                raise ValueError('Attribute "scale" must not be None for objaverse diffusion.')
+        elif variant == "instruct_pix2pix":
+            if init_model:
+                self.model, H, W = load_instruct_pix2pix_model()
+            else:
+                self.model, H, W = None, 256, 256
+            if text_cfg_scale is None or image_cfg_scale is None:
+                raise ValueError('Attributes "text_cfg_scale" and "image_cfg_scale" must not be None for instruct_pix2pix diffusion.')
         else:
             raise ValueError(f"{variant}")
 
@@ -86,9 +105,12 @@ class StableDiffusion(ScoreAdapter):
         if init_model:
             self._device = self.model._device
 
+        self.variant = variant
         self.prompt = prompt
         self.im_path = im_path
         self.scale = scale
+        self.text_cfg_scale = text_cfg_scale
+        self.image_cfg_scale = image_cfg_scale
         self.precision = precision
         self.precision_scope = autocast if self.precision == "autocast" else nullcontext
         self._data_shape = (4, H // ae_resolution_f, W // ae_resolution_f)
@@ -163,6 +185,24 @@ class StableDiffusion(ScoreAdapter):
                 Ds = unscaled_xs - σ * output
                 return Ds
 
+    @torch.no_grad()
+    def denoise_instruct_pix2pix(self, xs, σ, cond):
+        with self.precision_scope("cuda"):
+            with self.model.ema_scope():
+                N = xs.shape[0]
+                cond_t, σ = self.time_cond_vec(N, σ)
+                unscaled_xs = xs
+                xs = xs / _sqrt(1 + σ**2)
+
+                x_in = torch.cat([xs] * 3)
+                t_in = torch.cat([cond_t] * 3)
+
+                out_cond, out_img_cond, out_uncond = self.model.apply_model(x_in, t_in, cond=cond).chunk(3)
+                predicted_noise =  out_uncond + self.text_cfg_scale * (out_cond - out_img_cond) + self.image_cfg_scale * (out_img_cond - out_uncond)
+
+                Ds = unscaled_xs - σ * predicted_noise
+                return Ds
+
     def cond_info(self, batch_size):
         prompts = batch_size * [self.prompt]
         return self.prompts_emb(prompts)
@@ -206,6 +246,25 @@ class StableDiffusion(ScoreAdapter):
                     cond['c'] = c
                     cond['uc'] = torch.zeros_like(c)
                     return cond
+
+    @torch.no_grad()
+    def intruct_pix2pix_emb(self, input_im):
+        null_token = self.model.get_learned_conditioning([""])
+        cond = {}
+        cond["c_crossattn"] = self.model.get_learned_conditioning([self.prompt])
+        cond["c_concat"] = self.model.encode_first_stage(input_im).mode()
+
+        uncond = {}
+        uncond["c_crossattn"] = null_token
+        uncond["c_concat"] = torch.zeros_like(cond["c_concat"])
+        # The conditionals here corresponds to (both image and text emb, image emb only, no emb)
+        c_crossattn = [torch.cat([cond["c_crossattn"], uncond["c_crossattn"], uncond["c_crossattn"]])]
+        c_concat = [torch.cat([cond["c_concat"], cond["c_concat"], uncond["c_concat"]])]
+        cfg_cond = {
+            "c_crossattn": c_crossattn,
+            "c_concat": c_concat,
+        }
+        return cfg_cond
 
     def unet_is_cond(self):
         return True
@@ -262,7 +321,10 @@ class StableDiffusion(ScoreAdapter):
     def decode(self, xs):
         with self.precision_scope("cuda"):
             with self.model.ema_scope():
-                xs = self.model.decode_first_stage(xs)
+                if self.variant == 'instruct_pix2pix':
+                    xs = self.model.differentiable_decode_first_stage(xs)
+                else:
+                    xs = self.model.decode_first_stage(xs)
                 return xs
 
 
