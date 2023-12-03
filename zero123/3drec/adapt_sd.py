@@ -71,16 +71,20 @@ def _sqrt(x):
 
 
 class StableDiffusion(ScoreAdapter):
-    def __init__(self, variant, v2_highres, prompt, scale, precision, im_path=None):
+    def __init__(self, variant, v2_highres, prompt, scale, precision, im_path=None, init_model=True):
         if variant == "objaverse":
             add_import_path("zero123")
-            self.model, H, W = load_objaverse_model(self.checkpoint_root())
+            if init_model:
+                self.model, H, W = load_objaverse_model(self.checkpoint_root())
+            else:
+                self.model, H, W = None, 256, 256
         else:
             raise ValueError(f"{variant}")
 
         ae_resolution_f = 8
 
-        self._device = self.model._device
+        if init_model:
+            self._device = self.model._device
 
         self.prompt = prompt
         self.im_path = im_path
@@ -89,7 +93,8 @@ class StableDiffusion(ScoreAdapter):
         self.precision_scope = autocast if self.precision == "autocast" else nullcontext
         self._data_shape = (4, H // ae_resolution_f, W // ae_resolution_f)
 
-        self.cond_func = self.model.get_learned_conditioning
+        if init_model:
+            self.cond_func = self.model.get_learned_conditioning
         self.M = 1000
         noise_schedule = "linear"
         self.noise_schedule = noise_schedule
