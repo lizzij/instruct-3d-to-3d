@@ -3,7 +3,8 @@ import math
 
 
 def blend_rgba(img):
-    img = img[..., :3] * img[..., -1:] + (1. - img[..., -1:])  # blend A to RGB
+    if img.shape[-1] == 4:
+        img = img[..., :3] * img[..., -1:] + (1. - img[..., -1:])  # blend A to RGB
     return img
 
 

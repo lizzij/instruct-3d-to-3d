@@ -146,3 +146,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Ignore generated data
+zero123_nerf_output
+zero123_config.yml

@@ -1,3 +1,6 @@
+# File modified by authors of InstructPix2Pix from original (https://github.com/CompVis/stable-diffusion).
+# See more details in LICENSE.
+
 from inspect import isfunction
 import math
 import torch
@@ -167,7 +170,11 @@ class CrossAttention(nn.Module):
             nn.Dropout(dropout)
         )
 
+        self.prompt_to_prompt = False
+
     def forward(self, x, context=None, mask=None):
+        is_self_attn = context is None
+
         h = self.heads
 
         q = self.to_q(x)
@@ -178,6 +185,13 @@ class CrossAttention(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+
+        if self.prompt_to_prompt and is_self_attn:
+            # Unlike the original Prompt-to-Prompt which uses cross-attention layers, we copy attention maps for self-attention layers.
+            # There must be 4 elements in the batch: {conditional, unconditional} x {prompt 1, prompt 2}
+            assert x.size(0) == 4
+            sims = sim.chunk(4)
+            sim = torch.cat((sims[0], sims[0], sims[2], sims[2]))
 
         if exists(mask):
             mask = rearrange(mask, 'b ... -> b (...)')

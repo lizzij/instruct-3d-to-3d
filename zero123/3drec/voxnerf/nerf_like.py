@@ -77,7 +77,8 @@ class RTMV(Dataset):
         return imgs, poses
                 
     def blend_rgba(self, img):
-        img = img[..., :3] * img[..., -1:] + (1. - img[..., -1:])  # blend A to RGB
+        if img.shape[-1] == 4:
+            img = img[..., :3] * img[..., -1:] + (1. - img[..., -1:])  # blend A to RGB
         return img
             
 
@@ -120,6 +121,7 @@ class GSO(Dataset):
         return imgs, poses
                 
     def blend_rgba(self, img):
-        img = img[..., :3] * img[..., -1:] + (1. - img[..., -1:])  # blend A to RGB
+        if img.shape[-1] == 4:
+            img = img[..., :3] * img[..., -1:] + (1. - img[..., -1:])  # blend A to RGB
         return img
              

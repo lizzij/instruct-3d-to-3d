@@ -6,6 +6,12 @@ import os
 import cv2
 from .utils import blend_rgba
 
+import sys
+import PIL
+# Hacky, but this codebase is already a speghetti so....
+sys.path.append('../zero123')
+from ldm.util import create_carvekit_interface, load_and_preprocess
+import matplotlib.pyplot as plt
 
 def load_blender(split, scene="lego", half_res=False, path="data/nerf_synthetic"):
     assert split in ("train", "val", "test")
@@ -17,10 +23,13 @@ def load_blender(split, scene="lego", half_res=False, path="data/nerf_synthetic"
 
     imgs, poses = [], []
 
+    carvekit = create_carvekit_interface()
     for frame in meta['frames']:
         file_name = root / f"{frame['file_path']}.png"
-        im = imageio.imread(file_name)
-        im = cv2.resize(im, (800, 800), interpolation = cv2.INTER_CUBIC)
+        with PIL.Image.open(file_name) as im:
+            # Remove the background for a cleaner image
+            im = load_and_preprocess(carvekit, im)
+            im = cv2.resize(im, (800, 800), interpolation = cv2.INTER_CUBIC)
 
         c2w = frame['transform_matrix']
 

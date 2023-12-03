@@ -150,20 +150,14 @@ def sjc_3d(poser, vox, model: ScoreAdapter,
     images_, _, poses_, mask_, fov_x = load_blender('train', scene=scene, path=nerf_path)
     # K_ = poser.get_K(H, W, fov_x * 180. / math.pi)
     K_ = poser.K
-    input_image, input_K, input_pose, input_mask = images_[index], K_, poses_[index], mask_[index]
+    input_image, input_K, input_pose, _ = images_[index], K_, poses_[index], mask_[index]
     input_pose[:3, -1] = input_pose[:3, -1] / np.linalg.norm(input_pose[:3, -1]) * poser.R
-    background_mask, image_mask = input_mask == 0., input_mask != 0.
     input_image = cv2.resize(input_image, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
-    image_mask = cv2.resize(image_mask.astype(np.float32), dsize=(256, 256), interpolation=cv2.INTER_NEAREST).astype(bool)
-    background_mask = cv2.resize(background_mask.astype(np.float32), dsize=(H, W), interpolation=cv2.INTER_NEAREST).astype(bool)
 
     # to torch tensor
     input_image = torch.as_tensor(input_image, dtype=float, device=device_glb)
     input_image = input_image.permute(2, 0, 1)[None, :, :]
     input_image = input_image * 2. - 1.
-    image_mask = torch.as_tensor(image_mask, dtype=bool, device=device_glb)
-    image_mask = image_mask[None, None, :, :].repeat(1, 3, 1, 1)
-    background_mask = torch.as_tensor(background_mask, dtype=bool, device=device_glb)
 
     print('==== loaded input view for training ====')
 
