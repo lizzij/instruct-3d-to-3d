@@ -248,7 +248,7 @@ class StableDiffusion(ScoreAdapter):
                     return cond
 
     @torch.no_grad()
-    def intruct_pix2pix_emb(self, input_im):
+    def instruct_pix2pix_emb(self, input_im):
         null_token = self.model.get_learned_conditioning([""])
         cond = {}
         cond["c_crossattn"] = self.model.get_learned_conditioning([self.prompt])
