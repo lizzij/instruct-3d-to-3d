@@ -22,7 +22,7 @@ vox:
   blend_bg_texture: false
   bg_texture_hw: 4
 pose:
-  rend_hw: 64
+  rend_hw: 32
   FoV: 49.1
   R: 2.0
   up: z

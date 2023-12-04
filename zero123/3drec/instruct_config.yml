@@ -10,7 +10,7 @@ sd:
   precision: autocast
 training_data_dir: zero123_nerf_output
 lr: 0.05
-n_steps: 29
+n_steps: 1000
 vox:
   model_type: V_SD
   bbox_len: 1.0
@@ -24,6 +24,7 @@ vox:
   c: 4
   blend_bg_texture: false
   bg_texture_hw: 4
+vox_warmstart_ckpt: experiments/exp_wild/scene-spyro-index-0_scale-100.0_train-view-True_view-weight-10000_depth-smooth-wt-10000.0_near-view-wt-10000.0/ckpt/step_10000.pt
 pose:
   rend_hw: 32
   FoV: 49.1
@@ -35,7 +36,7 @@ emptiness_step: 0.5
 emptiness_multiplier: 20.0
 grad_accum: 1
 train_view: true
-depth_smooth_weight: 100000.0
-near_view_weight: 100000.0
-view_weight: 10000
+depth_smooth_weight: 0.0
+near_view_weight: 1000.0
+view_weight: 10000.0
 var_red: true
