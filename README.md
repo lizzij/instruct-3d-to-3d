@@ -24,7 +24,7 @@ Downloading the whole objaverse rendering takes more than 1.5TB. Do not download
 If your machine doesn't have enough disk space, follow the instruction below to manually render the 3D models.
 
 To download the whole objaverse renderings, run
-```wget https://tri-ml-public.s3.amazonaws.com/datasets/views_release.tar.gz``````
+```wget https://tri-ml-public.s3.amazonaws.com/datasets/views_release.tar.gz```
 
 Otherwise, do the following:
 ```

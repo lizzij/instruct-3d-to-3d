@@ -21,23 +21,24 @@ from run_nerf import VoxConfig
 import voxnerf
 from voxnerf.utils import every
 from my3d import depth_smooth_loss
+from run_instruct_3d_to_3d import get_input_fidelity_loss, get_emptiness_loss, get_nearby_view_loss
 
 import run_zero123
 
 device_glb = torch.device("cuda")
 
 
-class InstructSJC(BaseConf):
+class NerfForInstruct(BaseConf):
     family:     str = "sd"
     sd:         SD = SD(
         variant="instruct_pix2pix",
-        text_cfg_scale=7.5,
-        image_cfg_scale=1.5,
+        text_cfg_scale=7.5,  # Unused
+        image_cfg_scale=1.5, # unused
         scale=None,
-        prompt="Turn the dragon red",
-        im_path="instruct_pix2pix_output"
+        prompt="",
+        im_path="nerf_for_instruct_pix2pix"
     )
-    training_data_dir: str='zero123_nerf_output'
+    training_data_dir: str='views_whole_sphere/8ff7f1f2465347cd8b80c9b206c2781e'
     lr:         float = 0.05
     n_steps:    int = 10000
     vox:        VoxConfig = VoxConfig(
@@ -45,13 +46,11 @@ class InstructSJC(BaseConf):
         blend_bg_texture=False, bg_texture_hw=4,
         bbox_len=1.0
     )
-    # vox_warmstart_ckpt: Optional[str] = None
-    vox_warmstart_ckpt: Optional[str] = 'experiments/exp_wild/scene-spyro-index-0_scale-100.0_train-view-True_view-weight-10000_depth-smooth-wt-10000.0_near-view-wt-10000.0/ckpt/step_10000.pt'
-    pose:       PoseConfig = PoseConfig(rend_hw=32, FoV=49.1, R=2.0)
+    vox_warmstart_ckpt: Optional[str] = None
+    pose:       PoseConfig = PoseConfig(rend_hw=32, FoV=49.1, R=2.0, up='z')
 
-    # Disable depth_smooth_weight for now because it takes forever to run
     depth_smooth_weight: float = 0
-    near_view_weight: float = 1e3
+    near_view_weight: float = 0
     view_weight:        float = 1e4
 
     emptiness_weight:   int = 0
@@ -60,12 +59,7 @@ class InstructSJC(BaseConf):
     emptiness_multiplier: float = 20.0
 
     grad_accum: int = 1
-
-    train_view:         bool = True
-
-    var_red:     bool = True
-
-    save_step_percentage: int = 5
+    save_step_percentage: int = 1
 
     @validator("vox")
     def check_vox(cls, vox_cfg, values):
@@ -90,41 +84,12 @@ class InstructSJC(BaseConf):
             state = torch.load(self.vox_warmstart_ckpt, map_location="cpu")
             vox.load_state_dict(state)
 
-        instruct_sjc_3d(**cfgs, poser=poser, model=model, vox=vox)
+        train_nerf(**cfgs, poser=poser, model=model, vox=vox)
 
 
-def get_input_fidelity_loss(y, input_image, model):
-    y = model.decode(y)
-    rgb_loss = ((y - input_image) ** 2).mean()
-
-    input_loss = rgb_loss
-    return input_loss
-
-    
-def get_nearby_view_loss(y, depth, input_pose, poser, vox, aabb, H, W, K):
-    """A regularization to minimize image variation from small change in camera pose"""
-    # This is a bit confusing, but we are assuming that the object is
-    # in the origin. So we are creating a new pose that starts at
-    # near_eye, looking into the -near_eye direction, which goes
-    # through the origin.
-    # Camera location
-    eye = input_pose[:3, -1]
-    near_eye = sample_near_eye(eye)
-    # Look into the origin
-    near_pose = camera_pose(near_eye, -near_eye, poser.up)
-    y_near, depth_near, ws_near = run_zero123.render_one_view(vox, aabb, H, W, K, near_pose, return_w=True)
-    near_loss = ((y_near - y).abs().mean() + (depth_near - depth).abs().mean())
-    return near_loss
-
-    
-def get_emptiness_loss(ws, emptiness_scale):
-    emptiness_loss = (torch.log(1 + emptiness_scale * ws) * (-1 / 2 * ws)).mean()
-    return emptiness_loss
-
-
-def instruct_sjc_3d(poser, vox, model: StableDiffusion,
+def train_nerf(poser, vox, model: StableDiffusion,
     lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
-    var_red, train_view, view_weight, \
+    view_weight, \
     depth_smooth_weight, near_view_weight, grad_accum, training_data_dir, save_step_percentage, **kwargs):
 
     assert model.samps_centered()
@@ -161,7 +126,7 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
             if fuse.on_break():
                 break
 
-            input_image, input_pose = voxnerf.data.load_data(root=training_data_dir, step=i%epoch_size, meta=metadata)
+            input_image, input_pose = voxnerf.data.load_data(root=training_data_dir, step=i%epoch_size, meta=metadata, poser=poser)
             input_pose[:3, -1] = input_pose[:3, -1] / np.linalg.norm(input_pose[:3, -1]) * poser.R
             input_image = cv2.resize(input_image, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
 
@@ -179,7 +144,7 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
             y, depth, ws = run_zero123.render_one_view(vox, aabb, H, W, K, input_pose, return_w=True)
 
             # Input regularization
-            if train_view and view_weight:
+            if view_weight:
                 input_loss =  float(view_weight) * get_input_fidelity_loss(y, input_image, model)
                 input_loss.backward(retain_graph=True)
 
@@ -203,30 +168,6 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
                 pass
             else:
                 y = torch.nn.functional.interpolate(y, (target_H, target_W), mode='bilinear')
-
-            with torch.no_grad():
-                chosen_σs = np.random.choice(ts, bs, replace=False)
-                chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
-                chosen_σs = torch.as_tensor(chosen_σs, device=model.device, dtype=torch.float32)
-
-                noise = torch.randn(bs, *y.shape[1:], device=model.device)
-
-                zs = y + chosen_σs * noise
-
-                cond = model.instruct_pix2pix_emb(input_image)
-                Ds = model.denoise_instruct_pix2pix(zs, chosen_σs, cond)
-
-                if every(pbar, percent=save_step_percentage):
-                    metric.put_artifact("denoised_image", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(input_image)[0]))
-
-                if var_red:
-                    grad = (Ds - y) / chosen_σs
-                else:
-                    grad = (Ds - zs) / chosen_σs
-
-                grad = grad.mean(0, keepdim=True)
-
-            y.backward(-grad, retain_graph=True)
 
 
             if i % grad_accum == (grad_accum-1):
@@ -266,7 +207,7 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
 
 def main():
     seed_everything(0)
-    dispatch(InstructSJC, cfg_name="instruct_config.yml")
+    dispatch(NerfForInstruct, cfg_name="nerf_config.yml")
 
 
 if __name__ == "__main__":
