@@ -2,15 +2,15 @@ family: sd
 sd:
   variant: instruct_pix2pix
   v2_highres: false
-  prompt: ''
-  im_path: instruct_pix2pix
+  prompt: Turn the dragon red
+  im_path: instruct_pix2pix_output
   scale: null
   text_cfg_scale: 7.5
   image_cfg_scale: 1.5
   precision: autocast
 training_data_dir: zero123_nerf_output
 lr: 0.05
-n_steps: 1000
+n_steps: 10000
 vox:
   model_type: V_SD
   bbox_len: 1.0
@@ -40,3 +40,4 @@ depth_smooth_weight: 0.0
 near_view_weight: 1000.0
 view_weight: 10000.0
 var_red: true
+save_step_percentage: 5

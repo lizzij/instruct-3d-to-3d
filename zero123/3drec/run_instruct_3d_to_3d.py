@@ -34,12 +34,12 @@ class InstructSJC(BaseConf):
         text_cfg_scale=7.5,
         image_cfg_scale=1.5,
         scale=None,
-        prompt="",
-        im_path="instruct_pix2pix"
+        prompt="Turn the dragon red",
+        im_path="instruct_pix2pix_output"
     )
     training_data_dir: str='zero123_nerf_output'
     lr:         float = 0.05
-    n_steps:    int = 1000
+    n_steps:    int = 10000
     vox:        VoxConfig = VoxConfig(
         model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
         blend_bg_texture=False, bg_texture_hw=4,
@@ -49,8 +49,17 @@ class InstructSJC(BaseConf):
     vox_warmstart_ckpt: Optional[str] = 'experiments/exp_wild/scene-spyro-index-0_scale-100.0_train-view-True_view-weight-10000_depth-smooth-wt-10000.0_near-view-wt-10000.0/ckpt/step_10000.pt'
     pose:       PoseConfig = PoseConfig(rend_hw=32, FoV=49.1, R=2.0)
 
-    emptiness_scale:    int = 10
+    # Disable depth_smooth_weight for now because it takes forever to run
+    # depth_smooth_weight: float = 1e3
+    depth_smooth_weight: float = 0
+    # Disable regulazriation for now to check if instruct-pix-2-pix is working
+    # near_view_weight: float = 1e3
+    # view_weight:        float = 1e4
+    near_view_weight: float = 1e3
+    view_weight:        float = 1e4
+
     emptiness_weight:   int = 0
+    emptiness_scale:    int = 10
     emptiness_step:     float = 0.5
     emptiness_multiplier: float = 20.0
 
@@ -58,13 +67,9 @@ class InstructSJC(BaseConf):
 
     train_view:         bool = True
 
-    # Disable depth_smooth_weight for now because it takes forever to run
-    # depth_smooth_weight: float = 1e3
-    depth_smooth_weight: float = 0
-    near_view_weight: float = 1e3
-    view_weight:        float = 1e4
-
     var_red:     bool = True
+
+    save_step_percentage: int = 5
 
     @validator("vox")
     def check_vox(cls, vox_cfg, values):
@@ -124,7 +129,7 @@ def get_emptiness_loss(ws, emptiness_scale):
 def instruct_sjc_3d(poser, vox, model: StableDiffusion,
     lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
     var_red, train_view, view_weight, \
-    depth_smooth_weight, near_view_weight, grad_accum, training_data_dir, **kwargs):
+    depth_smooth_weight, near_view_weight, grad_accum, training_data_dir, save_step_percentage, **kwargs):
 
     assert model.samps_centered()
     _, target_H, target_W = model.data_shape()
@@ -138,7 +143,7 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
     ts = model.us[30:-10]
     fuse = EarlyLoopBreak(1)
 
-    folder_name = "instruct_pix2pix_output"
+    folder_name = model.im_path
 
     # load nerf view
     metadata = voxnerf.data.load_metadata(training_data_dir)
@@ -171,7 +176,7 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
                 input_image = input_image * 2. - 1.
                 input_image = tforms(input_image)
 
-            if every(pbar, percent=1):
+            if every(pbar, percent=save_step_percentage):
                 metric.put_artifact("src_view", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(input_image)[0]))
             
             # y: [1, 4, 64, 64] depth: [64, 64]  ws: [n, 4096]
@@ -203,29 +208,29 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
             else:
                 y = torch.nn.functional.interpolate(y, (target_H, target_W), mode='bilinear')
 
-            # TODO(any): Enable this once we can train a naive NeRF
-            # Do the actual jacobian chaining through diffusion model.
-            if False:
-                with torch.no_grad():
-                    chosen_σs = np.random.choice(ts, bs, replace=False)
-                    chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
-                    chosen_σs = torch.as_tensor(chosen_σs, device=model.device, dtype=torch.float32)
+            with torch.no_grad():
+                chosen_σs = np.random.choice(ts, bs, replace=False)
+                chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
+                chosen_σs = torch.as_tensor(chosen_σs, device=model.device, dtype=torch.float32)
 
-                    noise = torch.randn(bs, *y.shape[1:], device=model.device)
+                noise = torch.randn(bs, *y.shape[1:], device=model.device)
 
-                    zs = y + chosen_σs * noise
+                zs = y + chosen_σs * noise
 
-                    cond = model.intruct_pix2pix_emb(input_image)
-                    Ds = model.denoise_instruct_pix2pix(zs, chosen_σs, cond)
+                cond = model.instruct_pix2pix_emb(input_image)
+                Ds = model.denoise_instruct_pix2pix(zs, chosen_σs, cond)
 
-                    if var_red:
-                        grad = (Ds - y) / chosen_σs
-                    else:
-                        grad = (Ds - zs) / chosen_σs
+                if every(pbar, percent=save_step_percentage):
+                    metric.put_artifact("denoised_image", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(input_image)[0]))
 
-                    grad = grad.mean(0, keepdim=True)
+                if var_red:
+                    grad = (Ds - y) / chosen_σs
+                else:
+                    grad = (Ds - zs) / chosen_σs
 
-                y.backward(-grad, retain_graph=True)
+                grad = grad.mean(0, keepdim=True)
+
+            y.backward(-grad, retain_graph=True)
 
 
             if i % grad_accum == (grad_accum-1):
@@ -235,10 +240,10 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
             metric.put_scalars(**run_zero123.tsr_stats(y))
 
             if i % 1000 == 0 and i != 0:
-                with EventStorage(model.im_path.replace('/', '-') + '_scale-' + str(model.scale) + "_test"):
+                with EventStorage(model.im_path.replace('/', '-')):
                     run_zero123.evaluate(model, vox, poser)
 
-            if every(pbar, percent=1):
+            if every(pbar, percent=save_step_percentage):
                 with torch.no_grad():
                     depth_value = depth.clone()
                     if isinstance(model, StableDiffusion):
