@@ -26,13 +26,9 @@ def load_data(root="zero123_nerf_output", step=0, meta=None):
 
     imgs, poses = [], []
 
-    carvekit = create_carvekit_interface()
     frame = meta['frames'][step]
     file_name = os.path.join(root, f"{frame['file_path']}")
-    with PIL.Image.open(file_name) as im:
-        # Remove the background for a cleaner image
-        im = load_and_preprocess(carvekit, im)
-        im = cv2.resize(im, (800, 800), interpolation = cv2.INTER_CUBIC)
+    im = imageio.imread(file_name)
 
     c2w = frame['transform_matrix']
 

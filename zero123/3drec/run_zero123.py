@@ -396,5 +396,5 @@ def latest_ckpt():
 
 if __name__ == "__main__":
     seed_everything(0)
-    dispatch(SJC)
+    dispatch(SJC, cfg_name="zero123_config.yml")
     # evaluate_ckpt()

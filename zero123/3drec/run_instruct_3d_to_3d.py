@@ -8,10 +8,8 @@ from pydantic import validator
 from torchvision import transforms
 
 from my.utils import (
-    tqdm, EventStorage, HeartBeat, EarlyLoopBreak,
-    get_event_storage, get_heartbeat, read_stats
-)
-from my.config import BaseConf, dispatch, optional_load_config
+    tqdm, EventStorage, HeartBeat, EarlyLoopBreak)
+from my.config import BaseConf, dispatch
 from my.utils.seed import seed_everything
 
 from adapt import ScoreAdapter
@@ -47,7 +45,8 @@ class InstructSJC(BaseConf):
         blend_bg_texture=False, bg_texture_hw=4,
         bbox_len=1.0
     )
-    vox_warmstart_ckpt: Optional[str] = None
+    # vox_warmstart_ckpt: Optional[str] = None
+    vox_warmstart_ckpt: Optional[str] = 'experiments/exp_wild/scene-spyro-index-0_scale-100.0_train-view-True_view-weight-10000_depth-smooth-wt-10000.0_near-view-wt-10000.0/ckpt/step_10000.pt'
     pose:       PoseConfig = PoseConfig(rend_hw=32, FoV=49.1, R=2.0)
 
     emptiness_scale:    int = 10
@@ -59,9 +58,11 @@ class InstructSJC(BaseConf):
 
     train_view:         bool = True
 
-    depth_smooth_weight: float = 1e5
-    near_view_weight: float = 1e5
-    view_weight:        int = 10000
+    # Disable depth_smooth_weight for now because it takes forever to run
+    # depth_smooth_weight: float = 1e3
+    depth_smooth_weight: float = 0
+    near_view_weight: float = 1e3
+    view_weight:        float = 1e4
 
     var_red:     bool = True
 
@@ -89,6 +90,35 @@ class InstructSJC(BaseConf):
             vox.load_state_dict(state)
 
         instruct_sjc_3d(**cfgs, poser=poser, model=model, vox=vox)
+
+
+def get_input_fidelity_loss(y, input_image, model):
+    y = model.decode(y)
+    rgb_loss = ((y - input_image) ** 2).mean()
+
+    input_loss = rgb_loss
+    return input_loss
+
+    
+def get_nearby_view_loss(y, depth, input_pose, poser, vox, aabb, H, W, K):
+    """A regularization to minimize image variation from small change in camera pose"""
+    # This is a bit confusing, but we are assuming that the object is
+    # in the origin. So we are creating a new pose that starts at
+    # near_eye, looking into the -near_eye direction, which goes
+    # through the origin.
+    # Camera location
+    eye = input_pose[:3, -1]
+    near_eye = sample_near_eye(eye)
+    # Look into the origin
+    near_pose = camera_pose(near_eye, -near_eye, poser.up)
+    y_near, depth_near, ws_near = run_zero123.render_one_view(vox, aabb, H, W, K, near_pose, return_w=True)
+    near_loss = ((y_near - y).abs().mean() + (depth_near - depth).abs().mean())
+    return near_loss
+
+    
+def get_emptiness_loss(ws, emptiness_scale):
+    emptiness_loss = (torch.log(1 + emptiness_scale * ws) * (-1 / 2 * ws)).mean()
+    return emptiness_loss
 
 
 def instruct_sjc_3d(poser, vox, model: StableDiffusion,
@@ -126,7 +156,6 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
             transforms.CenterCrop((256, 256))
         ])
 
-
         for i in range(n_steps):
             if fuse.on_break():
                 break
@@ -136,44 +165,38 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
             input_image = cv2.resize(input_image, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
 
             # to torch tensor
-            input_image = torch.as_tensor(input_image, dtype=float, device=device_glb).float()
-            input_image = input_image.permute(2, 0, 1)[None, :, :]
-            input_image = input_image * 2. - 1.
-            input_image = tforms(input_image)
+            with torch.no_grad():
+                input_image = torch.as_tensor(input_image, dtype=float, device=device_glb).float()
+                input_image = input_image.permute(2, 0, 1)[None, :, :]
+                input_image = input_image * 2. - 1.
+                input_image = tforms(input_image)
 
             if every(pbar, percent=1):
                 metric.put_artifact("src_view", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(input_image)[0]))
-
             
-            if train_view:
-                #TODO(any): Right now we fail to train a baseline NeRF through this. Need to investigate to see what's wrong.
-                with torch.enable_grad():
-                    y_, depth_, ws_ = run_zero123.render_one_view(vox, aabb, H, W, K, input_pose, return_w=True)
-                    y_ = model.decode(y_)
-                rgb_loss = ((y_ - input_image) ** 2).mean()
-
-                input_smooth_loss = depth_smooth_loss(depth_) * depth_smooth_weight * 0.1
-                input_smooth_loss.backward(retain_graph=True)
-
-                input_loss = rgb_loss * float(view_weight)
-                input_loss.backward(retain_graph=True)
-                if every(pbar, percent=1):
-                    metric.put_artifact("input_view", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(y_)[0]))
-
             # y: [1, 4, 64, 64] depth: [64, 64]  ws: [n, 4096]
             y, depth, ws = run_zero123.render_one_view(vox, aabb, H, W, K, input_pose, return_w=True)
 
-            # This is a bit confusing, but we are assuming that the object is
-            # in the origin. So we are creating a new pose that starts at
-            # near_eye, looking into the -near_eye direction, which goes
-            # through the origin.
-            # near-by view
-            eye = input_pose[:3, -1]
-            near_eye = sample_near_eye(eye)
-            near_pose = camera_pose(near_eye, -near_eye, poser.up)
-            y_near, depth_near, ws_near = run_zero123.render_one_view(vox, aabb, H, W, K, near_pose, return_w=True)
-            near_loss = ((y_near - y).abs().mean() + (depth_near - depth).abs().mean()) * near_view_weight
-            near_loss.backward(retain_graph=True)
+            # Input regularization
+            if train_view and view_weight:
+                input_loss =  float(view_weight) * get_input_fidelity_loss(y, input_image, model)
+                input_loss.backward(retain_graph=True)
+
+            # near-by view regularziation
+            if near_view_weight:
+                near_loss = near_view_weight * get_nearby_view_loss(y, depth, input_pose, poser, vox, aabb, H, W, K)
+                near_loss.backward(retain_graph=True)
+
+            # depth smoothness loss
+            if depth_smooth_weight:
+                smooth_loss =  depth_smooth_weight * depth_smooth_loss(depth)
+                smooth_loss.backward(retain_graph=True)
+
+            # negative emptiness loss
+            if emptiness_weight and i >= emptiness_step * n_steps:
+                emptiness_loss = emptiness_weight * get_emptiness_loss(ws, emptiness_scale)
+                emptiness_loss = emptiness_loss * (1. + emptiness_multiplier * i / n_steps)
+                emptiness_loss.backward(retain_graph=True)
 
             if isinstance(model, StableDiffusion):
                 pass
@@ -204,19 +227,6 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
 
                 y.backward(-grad, retain_graph=True)
 
-            # negative emptiness loss
-            emptiness_loss = (torch.log(1 + emptiness_scale * ws) * (-1 / 2 * ws)).mean()
-            emptiness_loss = emptiness_weight * emptiness_loss
-            emptiness_loss = emptiness_loss * (1. + emptiness_multiplier * i / n_steps)
-            emptiness_loss.backward(retain_graph=True)
-
-            # depth smoothness loss
-            smooth_loss = depth_smooth_loss(depth) * depth_smooth_weight
-
-            if i >= emptiness_step * n_steps:
-                smooth_loss.backward(retain_graph=True)
-
-            depth_value = depth.clone()
 
             if i % grad_accum == (grad_accum-1):
                 opt.step()
@@ -230,6 +240,7 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
 
             if every(pbar, percent=1):
                 with torch.no_grad():
+                    depth_value = depth.clone()
                     if isinstance(model, StableDiffusion):
                         y = model.decode(y)
                     run_zero123.vis_routine(metric, y, depth_value)

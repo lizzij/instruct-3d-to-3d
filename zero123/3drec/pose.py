@@ -164,7 +164,6 @@ class Poser():
         return random_Ks, poses, prompts
 
     def sample_test(self, n):
-        print(self.up)
         poses = spiral_poses(self.R, self.R, n, num_rounds=3, up=self.up)
         poses.reverse()
         poses = np.stack(poses, axis=0)
