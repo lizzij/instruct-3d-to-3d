@@ -123,12 +123,34 @@ def spiral_poses(
     ]
     return poses
 
+def planar_poses(
+    radius, height,
+    num_steps=20, num_rounds=1,
+    center=np.array([0, 0, 0]), up=np.array([0, 0, 1]),
+):
+    eyes = []
+    for i in range(num_steps):
+        ratio = i / num_steps
+        r = radius * ratio
+        theta = ratio * (360 * num_rounds) * (π / 180)
+        z = height/4 - height/4/4 + r/4 * np.cos(theta)
+        x = radius
+        y = r/8 * np.sin(theta)
+
+        eyes.append(center + [x, y, z])
+
+    poses = [
+        camera_pose(e, center - e, up) for e in eyes
+    ]
+    return poses
+
 
 class PoseConfig(BaseConf):
     rend_hw: int = 64
     FoV: float = 60.0
     R: float = 1.5
     up: str = 'z'
+    test_view_type: str='spiral'
 
     def make(self):
         cfgs = self.dict()
@@ -139,7 +161,7 @@ class PoseConfig(BaseConf):
 
 
 class Poser():
-    def __init__(self, H, W, FoV, R, up='z'):
+    def __init__(self, H, W, FoV, R, up='z', test_view_type='spiral'):
         self.H, self.W = H, W
         self.R = R
         self.K = get_K(H, W, FoV)
@@ -149,6 +171,7 @@ class Poser():
             self.up = np.array([0, 1, 0])
         elif up == 'x':
             self.up = np.array([1, 0, 0])
+        self.test_view_type = test_view_type
 
     def sample_train(self, n):
         eyes, prompts = train_eye_with_prompts(r=self.R, n=n)
@@ -164,7 +187,10 @@ class Poser():
         return random_Ks, poses, prompts
 
     def sample_test(self, n):
-        poses = spiral_poses(self.R, self.R, n, num_rounds=3, up=self.up)
+        if self.test_view_type == 'spiral':
+            poses = spiral_poses(self.R, self.R, n, num_rounds=3, up=self.up)
+        else:
+            poses = planar_poses(self.R, self.R, n, num_rounds=3, up=self.up)
         poses.reverse()
         poses = np.stack(poses, axis=0)
         return self.K, poses

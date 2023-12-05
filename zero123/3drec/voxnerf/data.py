@@ -39,11 +39,11 @@ def load_data(root="zero123_nerf_output", step=0, meta=None, poser: pose.Poser=N
     imgs = (np.array(imgs) / 255.).astype(np.float32)  # (RGBA) imgs
     imgs = blend_rgba(imgs)
     poses = np.array(poses).astype(np.float32)
-    if poser:
-        # The corrdinate system used by NeRF does not match what's used by blender.
-        # So we will instead generate our own poses directly based on camera location
-        eye = poses[0][0:3, -1]
-        poses[0] = pose.camera_pose(eye, -eye, up=poser.up)
+    # if poser:
+    #     # The corrdinate system used by NeRF does not match what's used by blender.
+    #     # So we will instead generate our own poses directly based on camera location
+    #     eye = poses[0][0:3, -1]
+    #     poses[0] = pose.camera_pose(eye, -eye, up=poser.up)
 
     return imgs[0], poses[0]
 
