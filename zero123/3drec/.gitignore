@@ -148,7 +148,6 @@ dmypy.json
 .pyre/
 
 # Ignore generated data
-zero123_nerf_output/
-instruct_pix2pix_output/
-nerf_for_instruct_pix2pix/
 views_whole_sphere/
+nerf_output/
+instruct_3d_to_3d_output/
