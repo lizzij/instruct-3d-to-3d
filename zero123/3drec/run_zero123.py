@@ -69,7 +69,11 @@ class SJC(BaseConf):
     family:     str = "sd"
     sd:         SD = SD(
         variant="objaverse",
-        scale=100.0
+        prompt="",
+        im_path="output",
+        scale=100.0,
+        text_cfg_scale=None,
+        image_cfg_scale=None,
     )
     lr:         float = 0.05
     n_steps:    int = 10000
@@ -87,19 +91,19 @@ class SJC(BaseConf):
 
     grad_accum: int = 1
 
-    depth_smooth_weight: float = 1e5
-    near_view_weight: float = 1e5
+    depth_smooth_weight: float = 1e4
+    near_view_weight: float = 1e4
 
     depth_weight:       int = 0
 
     var_red:     bool = True
 
     train_view:         bool = True
-    scene:              str = 'chair'
-    index:              int = 2
+    scene:              str = 'spyro'
+    index:              int = 0
 
     view_weight:        int = 10000
-    prefix:             str = 'exp'
+    prefix:             str = 'experiments/exp_wild'
     nerf_path:          str = "data/nerf_wild"
 
     @validator("vox")
@@ -237,6 +241,10 @@ def sjc_3d(poser, vox, model: ScoreAdapter,
                 score_conds = model.img_emb(input_im, conditioning_key='hybrid', T=T)
 
                 Ds = model.denoise_objaverse(zs, chosen_σs, score_conds)
+                if every(pbar, percent=1):
+                    with torch.no_grad():
+                        metric.put_artifact("denoised_image", ".png",
+                                            lambda fn: imwrite(fn, torch_samps_to_imgs(model.decode(Ds))[0]))
 
                 if var_red:
                     grad = (Ds - y) / chosen_σs

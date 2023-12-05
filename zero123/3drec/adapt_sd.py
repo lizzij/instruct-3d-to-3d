@@ -108,6 +108,8 @@ class StableDiffusion(ScoreAdapter):
         self.variant = variant
         self.prompt = prompt
         self.im_path = im_path
+        if variant == 'instruct_pix2pix':
+            self.im_path += f'_txt_scale_{text_cfg_scale}_img_scale_{image_cfg_scale}'
         self.scale = scale
         self.text_cfg_scale = text_cfg_scale
         self.image_cfg_scale = image_cfg_scale

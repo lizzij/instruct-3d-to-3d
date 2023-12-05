@@ -2,6 +2,7 @@ from typing import Optional
 import cv2
 import numpy as np
 import torch
+import os
 from imageio import imwrite
 from pydantic import validator
 
@@ -9,10 +10,9 @@ from torchvision import transforms
 
 from my.utils import (
     tqdm, EventStorage, HeartBeat, EarlyLoopBreak)
-from my.config import BaseConf, dispatch
+from my.config import BaseConf, dispatch, write_full_config
 from my.utils.seed import seed_everything
 
-from adapt import ScoreAdapter
 from run_img_sampling import SD, StableDiffusion
 from misc import torch_samps_to_imgs
 from pose import PoseConfig, camera_pose, sample_near_eye
@@ -34,25 +34,25 @@ class InstructSJC(BaseConf):
         text_cfg_scale=7.5,
         image_cfg_scale=1.5,
         scale=None,
-        prompt="Turn the dragon red",
-        im_path="instruct_pix2pix_output"
+        prompt="Turn it into lego blocks.",
+        im_path="instruct_3d_to_3d_output/building_planar"
     )
-    training_data_dir: str='zero123_nerf_output'
+    training_data_dir: str='views_whole_sphere/building_planar'
     lr:         float = 0.05
     n_steps:    int = 10000
     vox:        VoxConfig = VoxConfig(
-        model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
+        model_type="V_SD", grid_size=100, density_shift=-1.0, c=4,
         blend_bg_texture=False, bg_texture_hw=4,
         bbox_len=1.0
     )
     # vox_warmstart_ckpt: Optional[str] = None
-    vox_warmstart_ckpt: Optional[str] = 'experiments/exp_wild/scene-spyro-index-0_scale-100.0_train-view-True_view-weight-10000_depth-smooth-wt-10000.0_near-view-wt-10000.0/ckpt/step_10000.pt'
-    pose:       PoseConfig = PoseConfig(rend_hw=32, FoV=49.1, R=2.0)
+    vox_warmstart_ckpt: Optional[str] = 'nerf_output/nerf_building/ckpt/step_9999.pt'
+    pose:       PoseConfig = PoseConfig(rend_hw=32, FoV=49.1, R=2.0, test_view_type='planar')
 
     # Disable depth_smooth_weight for now because it takes forever to run
     depth_smooth_weight: float = 0
-    near_view_weight: float = 1e3
-    view_weight:        float = 1e4
+    near_view_weight: float = 0
+    view_weight:        float = 0
 
     emptiness_weight:   int = 0
     emptiness_scale:    int = 10
@@ -65,7 +65,9 @@ class InstructSJC(BaseConf):
 
     var_red:     bool = True
 
-    save_step_percentage: int = 5
+    save_step: int = 100
+    evaluate_step: int = 1000
+    checkpoint_step: int = 1000
 
     @validator("vox")
     def check_vox(cls, vox_cfg, values):
@@ -89,6 +91,9 @@ class InstructSJC(BaseConf):
         if self.vox_warmstart_ckpt:
             state = torch.load(self.vox_warmstart_ckpt, map_location="cpu")
             vox.load_state_dict(state)
+
+        os.makedirs(model.im_path, exist_ok=True)
+        write_full_config(self, fname=os.path.join(model.im_path, 'full_config.yaml'))
 
         instruct_sjc_3d(**cfgs, poser=poser, model=model, vox=vox)
 
@@ -123,9 +128,10 @@ def get_emptiness_loss(ws, emptiness_scale):
 
 
 def instruct_sjc_3d(poser, vox, model: StableDiffusion,
-    lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
-    var_red, train_view, view_weight, \
-    depth_smooth_weight, near_view_weight, grad_accum, training_data_dir, save_step_percentage, **kwargs):
+    lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step,
+    emptiness_multiplier, var_red, train_view, view_weight,
+    depth_smooth_weight, near_view_weight, grad_accum, training_data_dir,
+    save_step, evaluate_step, checkpoint_step, **kwargs):
 
     assert model.samps_centered()
     _, target_H, target_W = model.data_shape()
@@ -171,9 +177,6 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
                 input_image = input_image.permute(2, 0, 1)[None, :, :]
                 input_image = input_image * 2. - 1.
                 input_image = tforms(input_image)
-
-            if every(pbar, percent=save_step_percentage):
-                metric.put_artifact("src_view", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(input_image)[0]))
             
             # y: [1, 4, 64, 64] depth: [64, 64]  ws: [n, 4096]
             y, depth, ws = run_zero123.render_one_view(vox, aabb, H, W, K, input_pose, return_w=True)
@@ -216,8 +219,8 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
                 cond = model.instruct_pix2pix_emb(input_image)
                 Ds = model.denoise_instruct_pix2pix(zs, chosen_σs, cond)
 
-                if every(pbar, percent=save_step_percentage):
-                    metric.put_artifact("denoised_image", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(input_image)[0]))
+                if every(pbar, step=save_step):
+                    metric.put_artifact("denoised_image", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(model.decode(Ds))[0]))
 
                 if var_red:
                     grad = (Ds - y) / chosen_σs
@@ -235,18 +238,19 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
 
             metric.put_scalars(**run_zero123.tsr_stats(y))
 
-            if i % 1000 == 0 and i != 0:
-                with EventStorage(model.im_path.replace('/', '-')):
+            if every(pbar, step=evaluate_step) and i != 0:
+                with EventStorage('eval'):
                     run_zero123.evaluate(model, vox, poser)
 
-            if every(pbar, percent=save_step_percentage):
+            if every(pbar, step=save_step):
                 with torch.no_grad():
+                    metric.put_artifact("src_view", ".png", lambda fn: imwrite(fn, torch_samps_to_imgs(input_image)[0]))
                     depth_value = depth.clone()
                     if isinstance(model, StableDiffusion):
                         y = model.decode(y)
                     run_zero123.vis_routine(metric, y, depth_value)
 
-            if every(pbar, percent=25):
+            if every(pbar, step=checkpoint_step) and i != 0:
                 metric.put_artifact(
                     "ckpt", ".pt", lambda fn: torch.save(vox.state_dict(), fn)
                 )
