@@ -44,6 +44,7 @@ parser.add_argument("--scale", type=float, default=0.8)
 parser.add_argument("--num_images", type=int, default=8)
 parser.add_argument("--camera_dist", type=int, default=1.2)
 parser.add_argument("--sample_type", type=str, default="spherical")
+parser.add_argument("--output_name", type=str, default=None)
     
 argv = sys.argv[sys.argv.index("--") + 1 :]
 args = parser.parse_args(argv)
@@ -130,6 +131,20 @@ def spherical_camera(radius_min=1.9, radius_max=2.1, maxz=3, minz=-0.1):
     # from https://blender.stackexchange.com/questions/18530/
     x, y, z = sample_spherical(radius_min=radius_min, radius_max=radius_max,
                                maxz=maxz, minz=minz)
+    camera = bpy.data.objects["Camera"]
+    camera.location = x, y, z
+
+    direction = - camera.location
+    rot_quat = direction.to_track_quat('-Z', 'Y')
+    camera.rotation_euler = rot_quat.to_euler()
+    return camera
+
+
+def planar_camera(cam_dist=1.7, cam_var=0.1, square_dim=0.5):
+    x = cam_dist + np.random.uniform(low=-cam_var, high=cam_var)
+    y = np.random.uniform(-square_dim, square_dim)
+    z = 0.5 + np.random.uniform(-square_dim, square_dim)
+
     camera = bpy.data.objects["Camera"]
     camera.location = x, y, z
 
@@ -251,16 +266,20 @@ def save_images(object_file: str) -> None:
         'frames': []
     }
 
+    output_name = args.output_name if args.output_name else object_uid
+
     randomize_lighting()
     for i in range(args.num_images):
         # set camera
         if args.sample_type == 'spiral':
             spiral_camera(radius=2, idx=i, num_steps=args.num_images, num_rounds=max(3, args.num_images/13))
-        else:
+        elif args.sample_type == 'spherical':
             spherical_camera()
+        else:
+            planar_camera()
 
         # render the image
-        render_path = os.path.join(args.output_dir, object_uid, f"{i:03d}.png")
+        render_path = os.path.join(args.output_dir, output_name, f"{i:03d}.png")
         scene.render.filepath = render_path
         bpy.ops.render.render(write_still=True)
 
@@ -271,7 +290,7 @@ def save_images(object_file: str) -> None:
         }
         out_data['frames'].append(frame_data)
 
-    with open(os.path.join(args.output_dir, object_uid, 'transform_train.json'), 'w') as f:
+    with open(os.path.join(args.output_dir, output_name, 'transform_train.json'), 'w') as f:
         json.dump(out_data, f, indent=2)
 
 
