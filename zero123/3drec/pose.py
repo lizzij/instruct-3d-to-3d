@@ -124,18 +124,19 @@ def spiral_poses(
     return poses
 
 def planar_poses(
-    radius, height,
+    camera_dist, height,
     num_steps=20, num_rounds=1,
     center=np.array([0, 0, 0]), up=np.array([0, 0, 1]),
 ):
     eyes = []
+    square_dim = camera_dist / 4
     for i in range(num_steps):
         ratio = i / num_steps
-        r = radius * ratio
+        r = square_dim * ratio
         theta = ratio * (360 * num_rounds) * (π / 180)
-        z = height/4 - height/4/4 + r/4 * np.cos(theta)
-        x = radius
-        y = r/8 * np.sin(theta)
+        x = camera_dist
+        z = height + r * np.cos(theta)
+        y = r * np.sin(theta)
 
         eyes.append(center + [x, y, z])
 
@@ -190,7 +191,7 @@ class Poser():
         if self.test_view_type == 'spiral':
             poses = spiral_poses(self.R, self.R, n, num_rounds=3, up=self.up)
         else:
-            poses = planar_poses(self.R, self.R, n, num_rounds=3, up=self.up)
+            poses = planar_poses(self.R, self.R/8, n, num_rounds=6, up=self.up)
         poses.reverse()
         poses = np.stack(poses, axis=0)
         return self.K, poses

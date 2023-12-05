@@ -35,7 +35,7 @@ class InstructSJC(BaseConf):
         image_cfg_scale=1.5,
         scale=None,
         prompt="Turn it into lego blocks.",
-        im_path="instruct_3d_to_3d_output/building_planar"
+        im_path="instruct_3d_to_3d_output/building_lego_planar"
     )
     training_data_dir: str='views_whole_sphere/building_planar'
     lr:         float = 0.05
@@ -46,12 +46,12 @@ class InstructSJC(BaseConf):
         bbox_len=1.0
     )
     # vox_warmstart_ckpt: Optional[str] = None
-    vox_warmstart_ckpt: Optional[str] = 'nerf_output/nerf_building/ckpt/step_9999.pt'
+    vox_warmstart_ckpt: Optional[str] = 'nerf_output/building_v3_txt_scale_7.5_img_scale_1.5/ckpt/step_9999.pt'
     pose:       PoseConfig = PoseConfig(rend_hw=32, FoV=49.1, R=2.0, test_view_type='planar')
 
     # Disable depth_smooth_weight for now because it takes forever to run
     depth_smooth_weight: float = 0
-    near_view_weight: float = 0
+    near_view_weight: float = 1e1
     view_weight:        float = 0
 
     emptiness_weight:   int = 0
@@ -168,7 +168,6 @@ def instruct_sjc_3d(poser, vox, model: StableDiffusion,
                 break
 
             input_image, input_pose = voxnerf.data.load_data(root=training_data_dir, step=i%epoch_size, meta=metadata)
-            input_pose[:3, -1] = input_pose[:3, -1] / np.linalg.norm(input_pose[:3, -1]) * poser.R
             input_image = cv2.resize(input_image, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
 
             # to torch tensor

@@ -40,9 +40,9 @@ class NerfForInstruct(BaseConf):
         image_cfg_scale=1.5, # unused
         scale=None,
         prompt="",
-        im_path="nerf_output/building_v2"
+        im_path="nerf_output/building_v3"
     )
-    training_data_dir: str='views_whole_sphere/building_planar'
+    training_data_dir: str='views_whole_sphere/building_spherical'
     lr:         float = 0.05
     n_steps:    int = 10000
     vox:        VoxConfig = VoxConfig(
@@ -53,8 +53,8 @@ class NerfForInstruct(BaseConf):
     vox_warmstart_ckpt: Optional[str] = None
     pose:       PoseConfig = PoseConfig(rend_hw=32, FoV=49.1, R=2.0, up='z', test_view_type='planar')
 
-    depth_smooth_weight: float = 1e3
-    near_view_weight: float = 1e3
+    depth_smooth_weight: float = 0
+    near_view_weight: float = 0
     view_weight:        float = 1e4
 
     emptiness_weight:   int = 0
@@ -135,7 +135,6 @@ def train_nerf(poser, vox, model: StableDiffusion,
                 break
 
             input_image, input_pose = voxnerf.data.load_data(root=training_data_dir, step=i%epoch_size, meta=metadata, poser=poser)
-            input_pose[:3, -1] = input_pose[:3, -1] / np.linalg.norm(input_pose[:3, -1]) * poser.R
             input_image = cv2.resize(input_image, dsize=(256, 256), interpolation=cv2.INTER_CUBIC)
 
             # to torch tensor
