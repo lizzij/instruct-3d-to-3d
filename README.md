@@ -1,5 +1,5 @@
 # Instruct 3D-to-3D
-CS236 project
+Stanford CS236 project: convert a given 3D scene to another scene according to text instructions.
 
 ## Set up zero-123
 ```
