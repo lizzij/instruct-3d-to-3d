@@ -1,5 +1,9 @@
 # Instruct 3D-to-3D
-Stanford CS236 project: convert a given 3D scene to another scene according to text instructions.
+Convert a given 3D scene to another scene according to text instructions.
+
+<p align="center">
+  <img src="assets/poster.png" width="100%" alt="Instruct 3D-to-3D poster" />
+</p>
 
 ## Set up zero-123
 ```
