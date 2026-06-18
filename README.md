@@ -4,6 +4,10 @@
   <img src="assets/poster.png" width="100%" alt="Instruct 3D-to-3D poster" />
 </p>
 
+<p align="center">
+  📄 <a href="assets/Instruct-3D-to-3D_Final_Report.pdf">Final Report (PDF)</a>
+</p>
+
 ## Set up zero-123
 ```
 pushd zero123
